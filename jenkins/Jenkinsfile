@@ -1,0 +1,128 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'TARGET_ENV',
+            choices: ['homelab', 'vps'],
+            description: 'Select deployment target'
+        )
+    }
+
+    environment {
+        APP_NAME = "rudram"
+        IMAGE_NAME = "kiranlintech/rudram"
+        BUILD_TAG = "${BUILD_NUMBER}"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                url: 'https://github.com/kiranlintech/rudram.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh """
+                    docker build \
+                    -t ${IMAGE_NAME}:${BUILD_TAG} \
+                    -t ${IMAGE_NAME}:latest .
+                """
+            }
+        }
+
+        stage('Push To DockerHub') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )
+                ]) {
+
+                    sh '''
+                    echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+
+                    docker push ${IMAGE_NAME}:${BUILD_TAG}
+                    docker push ${IMAGE_NAME}:latest
+
+                    docker logout
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy Homelab') {
+            when {
+                expression {
+                    params.TARGET_ENV == 'homelab'
+                }
+            }
+
+            steps {
+                sshagent(['homelab-ssh']) {
+
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ubuntu@192.168.5.9 '
+
+                    docker pull ${IMAGE_NAME}:latest
+
+                    docker stop rudram || true
+                    docker rm rudram || true
+
+                    docker run -d \
+                      --name rudram \
+                      --restart unless-stopped \
+                      -p 8080:8080 \
+                      ${IMAGE_NAME}:latest
+                    '
+                    """
+                }
+            }
+        }
+
+        stage('Deploy VPS') {
+            when {
+                expression {
+                    params.TARGET_ENV == 'vps'
+                }
+            }
+
+            steps {
+                sshagent(['vps-ssh']) {
+
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ubuntu@213.210.37.106 '
+
+                    docker pull ${IMAGE_NAME}:latest
+
+                    docker stop rudram || true
+                    docker rm rudram || true
+
+                    docker run -d \
+                      --name rudram \
+                      --restart unless-stopped \
+                      -p 8080:8080 \
+                      ${IMAGE_NAME}:latest
+                    '
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "Deployment Successful"
+        }
+
+        failure {
+            echo "Deployment Failed"
+        }
+    }
+}
