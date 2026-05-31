@@ -3,16 +3,18 @@ pipeline {
 
     parameters {
         choice(
-            name: 'TARGET_ENV',
-            choices: ['homelab', 'vps'],
+            name: 'DEPLOY_TARGET',
+            choices: ['HOMELAB', 'VPS'],
             description: 'Select deployment target'
         )
     }
 
     environment {
-        APP_NAME = "rudram"
         IMAGE_NAME = "kiranlintech/rudram"
-        BUILD_TAG = "${BUILD_NUMBER}"
+        IMAGE_TAG  = "${BUILD_NUMBER}"
+
+        HOMELAB_HOST = "192.168.5.9"
+        VPS_HOST     = "213.210.37.106"
     }
 
     stages {
@@ -20,109 +22,65 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                url: 'https://github.com/kiranlintech/rudram.git'
+                    url: 'https://github.com/kiranlintech/rudram.git'
             }
         }
 
         stage('Build Docker Image') {
             steps {
                 sh """
-                    docker build \
-                    -t ${IMAGE_NAME}:${BUILD_TAG} \
-                    -t ${IMAGE_NAME}:latest .
+                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                    docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
                 """
             }
         }
 
-        stage('Push To DockerHub') {
+        stage('Push DockerHub') {
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'dockerhub',
+                        credentialsId: 'dockerhub-creds',
                         usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASS'
                     )
                 ]) {
-
                     sh '''
-                    echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
 
-                    docker push ${IMAGE_NAME}:${BUILD_TAG}
-                    docker push ${IMAGE_NAME}:latest
-
-                    docker logout
+                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                        docker push ${IMAGE_NAME}:latest
                     '''
                 }
             }
         }
 
-        stage('Deploy Homelab') {
-            when {
-                expression {
-                    params.TARGET_ENV == 'homelab'
-                }
-            }
-
+        stage('Deploy') {
             steps {
-                sshagent(['homelab-ssh']) {
+                script {
+
+                    def target = ""
+
+                    if (params.DEPLOY_TARGET == "HOMELAB") {
+                        target = "ubuntu@${HOMELAB_HOST}"
+                    } else {
+                        target = "ubuntu@${VPS_HOST}"
+                    }
 
                     sh """
-                    ssh -o StrictHostKeyChecking=no ubuntu@192.168.5.9 '
+                    ssh ${target} '
+                        docker pull ${IMAGE_NAME}:latest
 
-                    docker pull ${IMAGE_NAME}:latest
+                        docker stop rudram || true
+                        docker rm rudram || true
 
-                    docker stop rudram || true
-                    docker rm rudram || true
-
-                    docker run -d \
-                      --name rudram \
-                      --restart unless-stopped \
-                      -p 8080:8080 \
-                      ${IMAGE_NAME}:latest
+                        docker run -d \
+                            --name rudram \
+                            -p 8082:8080 \
+                            ${IMAGE_NAME}:latest
                     '
                     """
                 }
             }
-        }
-
-        stage('Deploy VPS') {
-            when {
-                expression {
-                    params.TARGET_ENV == 'vps'
-                }
-            }
-
-            steps {
-                sshagent(['vps-ssh']) {
-
-                    sh """
-                    ssh -o StrictHostKeyChecking=no ubuntu@213.210.37.106 '
-
-                    docker pull ${IMAGE_NAME}:latest
-
-                    docker stop rudram || true
-                    docker rm rudram || true
-
-                    docker run -d \
-                      --name rudram \
-                      --restart unless-stopped \
-                      -p 8080:8080 \
-                      ${IMAGE_NAME}:latest
-                    '
-                    """
-                }
-            }
-        }
-    }
-
-    post {
-
-        success {
-            echo "Deployment Successful"
-        }
-
-        failure {
-            echo "Deployment Failed"
         }
     }
 }
