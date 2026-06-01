@@ -10,8 +10,9 @@ pipeline {
     }
 
     environment {
-        IMAGE_NAME = "kiranlintech/rudram"
-        IMAGE_TAG  = "${BUILD_NUMBER}"
+        IMAGE_NAME   = "kiranlintech/rudram"
+        IMAGE_TAG    = "${BUILD_NUMBER}"
+
         HOMELAB_HOST = "192.168.5.9"
         VPS_HOST     = "213.210.37.106"
     }
@@ -24,11 +25,16 @@ pipeline {
                     url: 'https://github.com/kiranlintech/rudram.git'
             }
         }
+
         stage('OWASP Dependency Check') {
             steps {
                 dependencyCheck(
                     additionalArguments: '--scan ./',
                     odcInstallation: 'OWASP-Dependency-Check'
+                )
+
+                dependencyCheckPublisher(
+                    pattern: '**/dependency-check-report.xml'
                 )
             }
         }
@@ -43,15 +49,23 @@ pipeline {
 
                         sh """
                         ${scannerHome}/bin/sonar-scanner \
-                        -Dsonar.projectKey=flask-app \
-                        -Dsonar.sources=. \
-                        -Dsonar.host.url=http://sonarqube:9000
+                        -Dsonar.projectKey=rudram \
+                        -Dsonar.projectName=Rudram \
+                        -Dsonar.sources=.
                         """
                     }
                 }
             }
         }
-        
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
                 sh """
@@ -60,26 +74,25 @@ pipeline {
                 """
             }
         }
-        
+
         stage('Trivy Scan') {
             steps {
-                sh 'trivy image $IMAGE_NAME:$BUILD_NUMBER'
+                sh """
+                    trivy image --exit-code 0 --severity HIGH,CRITICAL ${IMAGE_NAME}:${IMAGE_TAG}
+                """
             }
         }
-        
+
         stage('Push to DockerHub') {
             steps {
                 withDockerRegistry(
-                    [
-                        credentialsId: 'dockerhub',
-                        url: 'https://index.docker.io/v1/'
-                    ]
+                    credentialsId: 'dockerhub',
+                    url: 'https://index.docker.io/v1/'
                 ) {
-                    sh '''
-                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+                    sh """
                         docker push ${IMAGE_NAME}:${IMAGE_TAG}
                         docker push ${IMAGE_NAME}:latest
-                    '''
+                    """
                 }
             }
         }
@@ -88,29 +101,43 @@ pipeline {
             steps {
                 script {
 
-                    def target = ""
-
-                    if (params.DEPLOY_TARGET == "HOMELAB") {
-                        target = "ubuntu@${HOMELAB_HOST}"
-                    } else {
-                        target = "ubuntu@${VPS_HOST}"
-                    }
+                    def target = params.DEPLOY_TARGET == "HOMELAB" ?
+                                 "ubuntu@${HOMELAB_HOST}" :
+                                 "ubuntu@${VPS_HOST}"
 
                     sh """
-                    ssh ${target} '
+                    ssh -o StrictHostKeyChecking=no ${target} '
                         docker pull ${IMAGE_NAME}:latest
 
                         docker stop rudram || true
                         docker rm rudram || true
 
+                        docker image prune -f
+
                         docker run -d \
                             --name rudram \
+                            --restart unless-stopped \
                             -p 8082:8080 \
                             ${IMAGE_NAME}:latest
                     '
                     """
                 }
             }
+        }
+    }
+
+    post {
+
+        success {
+            echo "Deployment successful to ${params.DEPLOY_TARGET}"
+        }
+
+        failure {
+            echo "Pipeline failed. Check logs for details."
+        }
+
+        always {
+            cleanWs()
         }
     }
 }
