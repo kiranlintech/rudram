@@ -1,7 +1,6 @@
 pipeline {
 agent any
 
-```
 parameters {
     choice(
         name: 'DEPLOY_TARGET',
@@ -151,6 +150,5 @@ post {
         cleanWs()
     }
 }
-```
 
 }
