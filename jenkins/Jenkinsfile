@@ -56,18 +56,20 @@ pipeline {
         }
 
         stage('SonarQube Analysis') {
-            steps {
-                script {
-                    def scannerHome = tool 'sonar-scanner'
+    steps {
+        script {
+            def scannerHome = tool 'sonar-scanner'
 
-                    withSonarQubeEnv('sonarqube') {
+            withSonarQubeEnv('sonarqube') {
 
-                        sh """
-                        ${scannerHome}/bin/sonar-scanner \
-                        -Dsonar.projectKey=rudram \
-                        -Dsonar.projectName=Rudram \
-                        -Dsonar.sources=src
-                        """
+                sh """
+                ${scannerHome}/bin/sonar-scanner \
+                -Dsonar.projectKey=rudram \
+                -Dsonar.projectName=Rudram \
+                -Dsonar.sources=. \
+                -Dsonar.inclusions=**/*.jsp,**/*.java,WEB-INF/** \
+                -Dsonar.exclusions=assets/**
+                """
                     }
                 }
             }
