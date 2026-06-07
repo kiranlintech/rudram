@@ -10,8 +10,8 @@ pipeline {
     }
 
     environment {
-        IMAGE_NAME   = "kiranlintech/rudram"
-        IMAGE_TAG    = "${BUILD_NUMBER}"
+        IMAGE_NAME = "kiranlintech/rudram"
+        IMAGE_TAG  = "${BUILD_NUMBER}"
 
         HOMELAB_HOST = "192.168.5.9"
         VPS_HOST     = "213.210.37.106"
@@ -23,6 +23,22 @@ pipeline {
             steps {
                 git branch: 'main',
                     url: 'https://github.com/kiranlintech/rudram.git'
+
+                sh '''
+                    echo "Workspace: $(pwd)"
+                    ls -la
+                '''
+            }
+        }
+
+        stage('Build WAR') {
+            steps {
+                sh '''
+                    mvn clean package -DskipTests
+
+                    echo "=== TARGET CONTENTS ==="
+                    ls -la target/
+                '''
             }
         }
 
@@ -42,7 +58,6 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 script {
-
                     def scannerHome = tool 'sonar-scanner'
 
                     withSonarQubeEnv('sonarqube') {
@@ -51,26 +66,20 @@ pipeline {
                         ${scannerHome}/bin/sonar-scanner \
                         -Dsonar.projectKey=rudram \
                         -Dsonar.projectName=Rudram \
-                        -Dsonar.sources=.
+                        -Dsonar.sources=src
                         """
                     }
                 }
             }
         }
 
-        // Skipping temporarily for learning purpose
-        //stage('Quality Gate') {
-        //    steps {
-        //        timeout(time: 5, unit: 'MINUTES') {
-        //            waitForQualityGate abortPipeline: true
-        //        }
-        //    }
-        //}
-
         stage('Build Docker Image') {
             steps {
                 sh """
-                    docker build -f docker/Dockerfile -t ${IMAGE_NAME}:${IMAGE_TAG} .
+                    docker build \
+                    -f docker/Dockerfile \
+                    -t ${IMAGE_NAME}:${IMAGE_TAG} .
+
                     docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
                 """
             }
@@ -79,7 +88,10 @@ pipeline {
         stage('Trivy Scan') {
             steps {
                 sh """
-                    trivy image --exit-code 0 --severity HIGH,CRITICAL ${IMAGE_NAME}:${IMAGE_TAG}
+                    trivy image \
+                    --exit-code 0 \
+                    --severity HIGH,CRITICAL \
+                    ${IMAGE_NAME}:${IMAGE_TAG}
                 """
             }
         }
@@ -108,6 +120,7 @@ pipeline {
 
                     sh """
                     ssh -o StrictHostKeyChecking=no ${target} '
+
                         docker pull ${IMAGE_NAME}:latest
 
                         docker stop rudram || true
@@ -116,10 +129,10 @@ pipeline {
                         docker image prune -f
 
                         docker run -d \
-                            --name rudram \
-                            --restart unless-stopped \
-                            -p 8082:8080 \
-                            ${IMAGE_NAME}:latest
+                          --name rudram \
+                          --restart unless-stopped \
+                          -p 8082:8080 \
+                          ${IMAGE_NAME}:latest
                     '
                     """
                 }
